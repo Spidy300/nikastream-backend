@@ -228,7 +228,7 @@ async def _anilist_query(query: str, variables: dict = None):
     async with httpx.AsyncClient(timeout=15.0) as client:
         res = await client.post(ANILIST_URL, json=body)
         if res.status_code != 200:
-            raise HTTPException(status_code=500, detail="AniList query failed")
+            raise HTTPException(status_code=res.status_code, detail=res.text[:500])
         return res.json().get("data", {})
 
 @app.get("/", response_class=HTMLResponse)
