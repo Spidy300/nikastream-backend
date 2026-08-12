@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>NikaStream Player</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.js"></script>
+    
+    <style>
+        body, html { 
+            margin: 0; 
+            padding: 0; 
+            width: 100%; 
+            height: 100%; 
+            background: #000; 
+            overflow: hidden; 
+            font-family: sans-serif; 
+            touch-action: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        #artplayer-app { 
+            width: 100vw; 
+            height: 100vh; 
+            padding-left: env(safe-area-inset-left);
+            padding-right: env(safe-area-inset-right);
+        }
+
+        #status-overlay { 
+            position: absolute; 
+            top: 10px; 
+            left: 10px; 
+            z-index: 9999; 
+            color: #94a3b8; 
+            font-size: 14px; 
+            background: rgba(0,0,0,0.6); 
+            padding: 5px 10px; 
+            border-radius: 4px; 
+            pointer-events: none; 
+            transition: opacity 0.3s ease;
+        }
+        #status-overlay.error { color: #f87171; }
+        #status-overlay.hidden { display: none; opacity: 0; }
+
+        /* ── SIMPLE NIKASTREAM WATERMARK ── */
+        #nika-brand {
+            position: absolute;
+            top: 20px;
+            right: max(20px, env(safe-area-inset-right) + 20px);
+            z-index: 9999;
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            opacity: 0.9;
+            transition: opacity 0.3s ease;
+        }
+        
+        #nika-brand span {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            font-size: 22px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            background: linear-gradient(135deg, #d8b4fe, #a855f7, #7c3aed);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-shadow: none;
+            filter: drop-shadow(0 2px 5px rgba(0,0,0,0.8));
+        }
+        
+        #nika-brand::before {
+            content: '';
+            display: block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #a855f7;
+            box-shadow: 0 0 10px 3px rgba(168, 85, 247, 0.7);
+            flex-shrink: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="status-overlay">Loading stream...</div>
+    <div id="artplayer-app"></div>
+
+    <script>
+    // ── CRITICAL FIX: monkey-patch MediaSource.addSourceBuffer ───────────────
+    (function () {
+        const _orig = MediaSource.prototype.addSourceBuffer;
+        MediaSource.prototype.addSourceBuffer = function (mimeType) {
+            const fixed = mimeType.replace(/mp4a\.\d+\.\d+/g, 'mp4a.40.2');
+            return _orig.call(this, fixed);
+        };
+    })();
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const statusOverlay = document.getElementById('status-overlay');
+    const PROXY_BASE = 'http://127.0.0.1:8000';
+
+    // Injected JSON Data
+    const videoData = {
+      "streams": [
+        { "url": "https://vault-16.owocdn.top/stream/16/14/e07bde2b257fbe44cb15d6702d3251415c114fd6b01283cf9669b116bfd9044a/uwu.m3u8", "type": "hls", "quality": "1080p", "isActive": true },
+        { "url": "https://kwik.cx/e/V1qX4BoFgpTs", "type": "embed", "quality": "1080p", "isActive": true },
+        { "url": "https://vault-16.owocdn.top/stream/16/14/f97da2f0b88daea63e3ecfcb2c64f5a1032707088b765ac846b5b44066bfb214/uwu.m3u8", "type": "hls", "quality": "720p", "isActive": false },
+        { "url": "https://kwik.cx/e/Jsjmpaaq8Wb5", "type": "embed", "quality": "720p", "isActive": false },
+        { "url": "https://vault-16.owocdn.top/stream/16/14/0aa00c029c4fbc8a0a3e701c15f23b2ebcf44906c74f08eacfeebb188ee5948d/uwu.m3u8", "type": "hls", "quality": "360p", "isActive": false },
+        { "url": "https://kwik.cx/e/HbxsylkJ8Jmp", "type": "embed", "quality": "360p", "isActive": false }
+      ],
+      "download": "https://pahe.win/tXkzq"
+    };
+
+    // Extract unique available qualities for the menu
+    const availableQualities = [...new Set(videoData.streams.map(s => s.quality))];
+
+    async function resolveStream(stream) {
+        if (stream.type === 'hls') return `${PROXY_BASE}/proxy?url=${encodeURIComponent(stream.url)}`;
+        if (stream.type === 'embed') {
+            const res = await fetch(`${PROXY_BASE}/kwik-extract?url=${encodeURIComponent(stream.url)}`);
+            if (!res.ok) throw new Error(`kwik-extract failed: ${res.status}`);
+            const data = await res.json();
+            return `${PROXY_BASE}/proxy?url=${encodeURIComponent(data.m3u8)}`;
+        }
+    }
+
+    function initPlayer(url, defaultQuality) {
+        statusOverlay.classList.add('hidden');
+
+        var art = new Artplayer({
+            container: '#artplayer-app',
+            url: url,
+            type: 'm3u8',
+            theme: '#a855f7', 
+            volume: 0.7,
+            playsInline: true,
+            autoOrientation: true,
+            lock: true,
+            fastForward: true,
+            pip: true,
+            setting: true,
+            playbackRate: true,
+            aspectRatio: true,
+            fullscreen: true,          
+            fullscreenWeb: true,
+            miniProgressBar: true,
+
+            // ── Watermark Layer ──
+            layers: [
+                {
+                    name: 'nika-watermark',
+                    html: '<div id="nika-brand"><span>NikaStream</span></div>',
+                }
+            ],
+
+            // ── Custom Controls (Skip 10s + Download) ──
+            controls: [
+                {
+                    position: 'left',
+                    index: 10,
+                    html: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-top: 5px;"><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 1 3 5 7 9"></polyline><text x="12" y="18" font-size="10" stroke="none" fill="#ffffff" font-weight="bold" text-anchor="middle">10</text></svg>',
+                    tooltip: 'Backward 10s',
+                    style: { cursor: 'pointer', marginLeft: '5px' },
+                    click: function () {
+                        art.currentTime -= 10;
+                    },
+                },
+                {
+                    position: 'left',
+                    index: 11,
+                    html: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-top: 5px;"><path d="M21 11V9a4 4 0 0 0-4-4H3"></path><polyline points="17 1 21 5 17 9"></polyline><text x="12" y="18" font-size="10" stroke="none" fill="#ffffff" font-weight="bold" text-anchor="middle">10</text></svg>',
+                    tooltip: 'Forward 10s',
+                    style: { cursor: 'pointer', marginLeft: '5px' },
+                    click: function () {
+                        art.currentTime += 10;
+                    },
+                },
+                {
+                    position: 'right',
+                    html: '<svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 22px; height: 22px; margin-top: 5px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>',
+                    tooltip: 'Download Video',
+                    style: { cursor: 'pointer', marginRight: '10px' },
+                    click: function () {
+                        window.open(videoData.download, '_blank');
+                    },
+                }
+            ],
+
+            // ── Quality Switcher ──
+            settings: [
+                {
+                    width: 200,
+                    html: 'Quality',
+                    tooltip: defaultQuality,
+                    selector: availableQualities.map(q => ({
+                        html: q,
+                        value: q,
+                        default: q === defaultQuality
+                    })),
+                    onSelect: async function (item) {
+                        const targetQuality = item.value;
+                        statusOverlay.textContent = `Switching to ${targetQuality}...`;
+                        statusOverlay.classList.remove('hidden');
+
+                        const qualityStreams = videoData.streams.filter(s => s.quality === targetQuality);
+                        let newUrl = null;
+
+                        for (const stream of qualityStreams) {
+                            try {
+                                newUrl = await resolveStream(stream);
+                                break; 
+                            } catch (e) {
+                                console.warn(`Fallback for ${targetQuality} failed.`);
+                            }
+                        }
+
+                        if (newUrl) {
+                            art.switchUrl(newUrl);
+                            statusOverlay.classList.add('hidden');
+                            return item.html;
+                        } else {
+                            statusOverlay.textContent = 'Quality unavailable.';
+                            statusOverlay.className = 'error';
+                            return false;
+                        }
+                    },
+                }
+            ],
+            
+            customType: {
+                m3u8: function (video, url, art) {
+                    if (Hls.isSupported()) {
+                        if (art.hls) art.hls.destroy();
+                        
+                        const hls = new Hls({ 
+                            xhrSetup(xhr) { xhr.withCredentials = false; },
+                            maxBufferSize: 30 * 1000 * 1000, 
+                            maxBufferLength: 30
+                        });
+                        hls.loadSource(url);
+                        hls.attachMedia(video);
+                        art.hls = hls;
+
+                        hls.on(Hls.Events.ERROR, (event, data) => {
+                            if (data.fatal) {
+                                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                                    hls.startLoad();
+                                } else {
+                                    hls.destroy();
+                                    art.notice.show = "Stream error. Please refresh.";
+                                }
+                            }
+                        });
+
+                    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                        video.src = url;
+                    } else {
+                        art.notice.show = "HLS not supported on this browser.";
+                    }
+                }
+            }
+        });
+    }
+
+    (async () => {
+        const targetQuality = '720p';
+        
+        let initialStreams = videoData.streams.filter(s => s.quality === targetQuality);
+        if (initialStreams.length === 0) {
+            const fallbackStream = videoData.streams.find(s => s.isActive) || videoData.streams[0];
+            initialStreams = videoData.streams.filter(s => s.quality === fallbackStream.quality);
+        }
+
+        const activeQuality = initialStreams[0]?.quality || 'Unknown';
+
+        for (const stream of initialStreams) {
+            try {
+                statusOverlay.textContent = `Loading ${activeQuality}...`;
+                const proxyUrl = await resolveStream(stream);
+                initPlayer(proxyUrl, activeQuality);
+                return; 
+            } catch (e) {
+                console.warn(`Failed primary stream: ${stream.type}`);
+            }
+        }
+        
+        statusOverlay.textContent = 'Stream unavailable.';
+        statusOverlay.className = 'error';
+    })();
+    </script>
+</body>
+</html>
